@@ -19,7 +19,8 @@
     "test:cov": "jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:e2e": "jest --config ./test/jest-e2e.json --detectOpenHandles --forceExit",
-    "setup:db": "ts-node -r tsconfig-paths/register setup-db.ts"
+    "setup:db": "ts-node -r tsconfig-paths/register setup-db.ts",
+    "seed:fake": "ts-node -r tsconfig-paths/register seed-fake-records.ts"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.0",
@@ -36,6 +37,7 @@
     "swagger-ui-express": "^5.0.1"
   },
   "devDependencies": {
+    "@faker-js/faker": "^10.2.0",
     "@nestjs/cli": "^11.0.0",
     "@nestjs/schematics": "^11.0.0",
     "@nestjs/testing": "^11.0.0",
