@@ -4,10 +4,10 @@ import { RecordFormat, RecordCategory } from './record.enum';
 
 @Schema({ timestamps: true })
 export class Record extends Document {
-  @Prop({ required: true })
+  @Prop({ required: true, index: true })
   artist: string;
 
-  @Prop({ required: true })
+  @Prop({ required: true, index: true })
   album: string;
 
   @Prop({ required: true })
@@ -16,10 +16,10 @@ export class Record extends Document {
   @Prop({ required: true })
   qty: number;
 
-  @Prop({ enum: RecordFormat, required: true })
+  @Prop({ enum: RecordFormat, required: true, index: true })
   format: RecordFormat;
 
-  @Prop({ enum: RecordCategory, required: true })
+  @Prop({ enum: RecordCategory, required: true, index: true })
   category: RecordCategory;
 
   @Prop({ default: Date.now })
@@ -33,3 +33,6 @@ export class Record extends Document {
 }
 
 export const RecordSchema = SchemaFactory.createForClass(Record);
+
+// Text index for full-text search across multiple fields
+RecordSchema.index({ artist: 'text', album: 'text', category: 'text' });

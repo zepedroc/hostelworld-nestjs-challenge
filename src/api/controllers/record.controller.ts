@@ -11,15 +11,17 @@ import {
 import { InjectModel } from '@nestjs/mongoose';
 import { Record } from '../schemas/record.schema';
 import { Model } from 'mongoose';
-import { ApiOperation, ApiQuery, ApiResponse } from '@nestjs/swagger';
+import { ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { CreateRecordRequestDTO } from '../dtos/create-record.request.dto';
-import { RecordCategory, RecordFormat } from '../schemas/record.enum';
 import { UpdateRecordRequestDTO } from '../dtos/update-record.request.dto';
+import { RecordFilterDto, PaginatedResult } from '../dtos/record-filter.dto';
+import { RecordService } from '../services/record.service';
 
 @Controller('records')
 export class RecordController {
   constructor(
     @InjectModel('Record') private readonly recordModel: Model<Record>,
+    private readonly recordService: RecordService,
   ) {}
 
   @Post()
@@ -62,84 +64,16 @@ export class RecordController {
   }
 
   @Get()
-  @ApiOperation({ summary: 'Get all records with optional filters' })
+  @ApiOperation({
+    summary: 'Get all records with optional filters and pagination',
+  })
   @ApiResponse({
     status: 200,
-    description: 'List of records',
-    type: [Record],
-  })
-  @ApiQuery({
-    name: 'q',
-    required: false,
-    description:
-      'Search query (search across multiple fields like artist, album, category, etc.)',
-    type: String,
-  })
-  @ApiQuery({
-    name: 'artist',
-    required: false,
-    description: 'Filter by artist name',
-    type: String,
-  })
-  @ApiQuery({
-    name: 'album',
-    required: false,
-    description: 'Filter by album name',
-    type: String,
-  })
-  @ApiQuery({
-    name: 'format',
-    required: false,
-    description: 'Filter by record format (Vinyl, CD, etc.)',
-    enum: RecordFormat,
-    type: String,
-  })
-  @ApiQuery({
-    name: 'category',
-    required: false,
-    description: 'Filter by record category (e.g., Rock, Jazz)',
-    enum: RecordCategory,
-    type: String,
+    description: 'Paginated list of records',
   })
   async findAll(
-    @Query('q') q?: string,
-    @Query('artist') artist?: string,
-    @Query('album') album?: string,
-    @Query('format') format?: RecordFormat,
-    @Query('category') category?: RecordCategory,
-  ): Promise<Record[]> {
-    const allRecords = await this.recordModel.find().exec();
-
-    const filteredRecords = allRecords.filter((record) => {
-      let match = true;
-
-      if (q) {
-        match =
-          match &&
-          (record.artist.includes(q) ||
-            record.album.includes(q) ||
-            record.category.includes(q));
-      }
-
-      if (artist) {
-        match = match && record.artist.includes(artist);
-      }
-
-      if (album) {
-        match = match && record.album.includes(album);
-      }
-
-      if (format) {
-        match = match && record.format === format;
-      }
-
-      if (category) {
-        match = match && record.category === category;
-      }
-
-      return match;
-    });
-
-    return filteredRecords;
+    @Query() filters: RecordFilterDto,
+  ): Promise<PaginatedResult<Record>> {
+    return this.recordService.findAll(filters);
   }
 }

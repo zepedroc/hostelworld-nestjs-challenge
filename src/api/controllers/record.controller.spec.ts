@@ -73,7 +73,7 @@ describe('RecordController', () => {
       exec: jest.fn().mockResolvedValue(records),
     } as any);
 
-    const result = await recordController.findAll();
+    const result = await recordController.findAll({});
     expect(result).toEqual(records);
     expect(recordModel.find).toHaveBeenCalled();
   });
