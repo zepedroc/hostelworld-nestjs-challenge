@@ -8,7 +8,6 @@ export class RecordFilterDto {
     description:
       'Search query (searches across artist, album, and category fields)',
     type: String,
-    example: 'Beatles',
   })
   @IsOptional()
   @IsString()
@@ -17,7 +16,6 @@ export class RecordFilterDto {
   @ApiPropertyOptional({
     description: 'Filter by artist name (partial match, case-insensitive)',
     type: String,
-    example: 'The Beatles',
   })
   @IsOptional()
   @IsString()
@@ -26,7 +24,6 @@ export class RecordFilterDto {
   @ApiPropertyOptional({
     description: 'Filter by album name (partial match, case-insensitive)',
     type: String,
-    example: 'Abbey Road',
   })
   @IsOptional()
   @IsString()
@@ -35,7 +32,6 @@ export class RecordFilterDto {
   @ApiPropertyOptional({
     description: 'Filter by record format',
     enum: RecordFormat,
-    example: RecordFormat.VINYL,
   })
   @IsOptional()
   @IsEnum(RecordFormat)
@@ -44,7 +40,6 @@ export class RecordFilterDto {
   @ApiPropertyOptional({
     description: 'Filter by record category',
     enum: RecordCategory,
-    example: RecordCategory.ROCK,
   })
   @IsOptional()
   @IsEnum(RecordCategory)
