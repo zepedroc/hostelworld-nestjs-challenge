@@ -2,6 +2,12 @@ import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document } from 'mongoose';
 import { RecordFormat, RecordCategory } from './record.enum';
 
+export interface Track {
+  position: number;
+  title: string;
+  duration?: number;
+}
+
 @Schema({ timestamps: true })
 export class Record extends Document {
   @Prop({ required: true, index: true })
@@ -30,6 +36,12 @@ export class Record extends Document {
 
   @Prop({ required: false })
   mbid?: string;
+
+  @Prop({
+    type: [{ position: Number, title: String, duration: Number }],
+    default: [],
+  })
+  tracklist: Track[];
 }
 
 export const RecordSchema = SchemaFactory.createForClass(Record);

@@ -3,11 +3,14 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model, FilterQuery } from 'mongoose';
 import { Record } from '../schemas/record.schema';
 import { RecordFilterDto, PaginatedResult } from '../dtos/record-filter.dto';
+import { CreateRecordRequestDTO } from '../dtos/create-record.request.dto';
+import { MusicBrainzService } from './musicbrainz.service';
 
 @Injectable()
 export class RecordService {
   constructor(
     @InjectModel('Record') private readonly recordModel: Model<Record>,
+    private readonly musicBrainzService: MusicBrainzService,
   ) {}
 
   /**
@@ -60,5 +63,29 @@ export class RecordService {
       limit,
       totalPages: Math.ceil(total / limit),
     };
+  }
+
+  /**
+   * Create a new record.
+   * If an MBID is provided, fetches tracklist from MusicBrainz API.
+   */
+  async create(dto: CreateRecordRequestDTO): Promise<Record> {
+    let tracklist = [];
+
+    // If MBID is provided, fetch tracklist from MusicBrainz
+    if (dto.mbid) {
+      tracklist = await this.musicBrainzService.fetchTracklist(dto.mbid);
+    }
+
+    return this.recordModel.create({
+      artist: dto.artist,
+      album: dto.album,
+      price: dto.price,
+      qty: dto.qty,
+      format: dto.format,
+      category: dto.category,
+      mbid: dto.mbid,
+      tracklist,
+    });
   }
 }
