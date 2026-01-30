@@ -60,8 +60,8 @@ describe('RecordController (e2e)', () => {
     const response = await request(app.getHttpServer())
       .get('/records?artist=The Fake Band')
       .expect(200);
-    expect(response.body.length).toBe(1);
-    expect(response.body[0]).toHaveProperty('artist', 'The Fake Band');
+    expect(response.body.data.length).toBe(1);
+    expect(response.body.data[0]).toHaveProperty('artist', 'The Fake Band');
   });
   afterEach(async () => {
     if (recordId) {
