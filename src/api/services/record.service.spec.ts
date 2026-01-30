@@ -1,5 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getModelToken } from '@nestjs/mongoose';
+import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import { NotFoundException } from '@nestjs/common';
 import { RecordService } from './record.service';
 import { MusicBrainzService } from './musicbrainz.service';
@@ -14,12 +15,14 @@ describe('RecordService', () => {
   let service: RecordService;
   let recordModel: any;
   let musicBrainzService: any;
+  let cacheManager: any;
 
   // Mock query chain for Mongoose
   const createMockQueryChain = () => {
     const chain = {
       skip: jest.fn().mockReturnThis(),
       limit: jest.fn().mockReturnThis(),
+      lean: jest.fn().mockReturnThis(),
       exec: jest.fn(),
     };
     return chain;
@@ -41,6 +44,12 @@ describe('RecordService', () => {
       fetchTracklist: jest.fn(),
     };
 
+    const mockCacheManager = {
+      get: jest.fn(),
+      set: jest.fn(),
+      del: jest.fn(),
+    };
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         RecordService,
@@ -52,12 +61,22 @@ describe('RecordService', () => {
           provide: MusicBrainzService,
           useValue: mockMusicBrainzService,
         },
+        {
+          provide: CACHE_MANAGER,
+          useValue: mockCacheManager,
+        },
       ],
     }).compile();
 
     service = module.get<RecordService>(RecordService);
     recordModel = module.get(getModelToken('Record'));
     musicBrainzService = module.get<MusicBrainzService>(MusicBrainzService);
+    cacheManager = module.get(CACHE_MANAGER);
+
+    // Default: cache miss for search queries
+    cacheManager.get.mockResolvedValue(null);
+    cacheManager.set.mockResolvedValue(undefined);
+    cacheManager.del.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -429,6 +448,89 @@ describe('RecordService', () => {
         format: RecordFormat.VINYL,
       });
     });
+
+    it('should return cached results on cache hit', async () => {
+      const filters: RecordFilterDto = { artist: 'The Beatles' };
+      const cachedResult = {
+        data: [
+          {
+            _id: '1',
+            artist: 'The Beatles',
+            album: 'Abbey Road',
+            price: 30,
+            qty: 50,
+          },
+        ],
+        total: 1,
+        page: 1,
+        limit: 50,
+        totalPages: 1,
+      };
+
+      cacheManager.get.mockResolvedValue(cachedResult);
+
+      const result = await service.findAll(filters);
+
+      expect(result).toEqual(cachedResult);
+      expect(cacheManager.get).toHaveBeenCalled();
+      expect(recordModel.find).not.toHaveBeenCalled();
+    });
+
+    it('should cache results on cache miss', async () => {
+      const filters: RecordFilterDto = { artist: 'The Beatles' };
+      const mockRecords: Record[] = [
+        {
+          _id: '1',
+          artist: 'The Beatles',
+          album: 'Abbey Road',
+          price: 30,
+          qty: 50,
+        } as Record,
+      ];
+
+      const mockQueryChain = createMockQueryChain();
+      mockQueryChain.exec.mockResolvedValue(mockRecords);
+      recordModel.find.mockReturnValue(mockQueryChain);
+      recordModel.countDocuments().exec.mockResolvedValue(1);
+
+      const result = await service.findAll(filters);
+
+      expect(result.data).toEqual(mockRecords);
+      expect(cacheManager.set).toHaveBeenCalledWith(
+        expect.stringContaining('records:search:'),
+        expect.objectContaining({
+          data: mockRecords,
+          total: 1,
+          page: 1,
+          limit: 50,
+        }),
+        60 * 1000, // 60 seconds TTL
+      );
+    });
+  });
+
+  describe('invalidateSearchCache', () => {
+    it('should delete all tracked cache keys', async () => {
+      // First, populate some cache entries by doing searches
+      const filters1: RecordFilterDto = { artist: 'Artist 1' };
+      const filters2: RecordFilterDto = { artist: 'Artist 2' };
+      const mockRecords: Record[] = [];
+
+      const mockQueryChain = createMockQueryChain();
+      mockQueryChain.exec.mockResolvedValue(mockRecords);
+      recordModel.find.mockReturnValue(mockQueryChain);
+      recordModel.countDocuments().exec.mockResolvedValue(0);
+
+      // Perform searches to populate activeCacheKeys
+      await service.findAll(filters1);
+      await service.findAll(filters2);
+
+      // Now invalidate
+      await service.invalidateSearchCache();
+
+      // Should have called del for each cached key
+      expect(cacheManager.del).toHaveBeenCalledTimes(2);
+    });
   });
 
   describe('create', () => {
@@ -545,6 +647,38 @@ describe('RecordService', () => {
         mbid: createDto.mbid,
         tracklist: [],
       });
+    });
+
+    it('should invalidate search cache after creating a record', async () => {
+      const createDto: CreateRecordRequestDTO = {
+        artist: 'Test Artist',
+        album: 'Test Album',
+        price: 100,
+        qty: 10,
+        format: RecordFormat.VINYL,
+        category: RecordCategory.ROCK,
+      };
+
+      const savedRecord: Record = {
+        _id: '123',
+        ...createDto,
+        tracklist: [],
+      } as Record;
+
+      recordModel.create.mockResolvedValue(savedRecord);
+
+      // First, do a search to populate the cache
+      const mockQueryChain = createMockQueryChain();
+      mockQueryChain.exec.mockResolvedValue([]);
+      recordModel.find.mockReturnValue(mockQueryChain);
+      recordModel.countDocuments().exec.mockResolvedValue(0);
+      await service.findAll({ artist: 'Test' });
+
+      // Now create a record
+      await service.create(createDto);
+
+      // Cache should have been invalidated
+      expect(cacheManager.del).toHaveBeenCalled();
     });
   });
 
@@ -838,6 +972,47 @@ describe('RecordService', () => {
 
       expect(result).toEqual(updatedRecord);
       expect(musicBrainzService.fetchTracklist).toHaveBeenCalledWith(newMbid);
+    });
+
+    it('should invalidate search cache after updating a record', async () => {
+      const recordId = '123';
+      const updateDto: UpdateRecordRequestDTO = {
+        price: 150,
+      };
+
+      const existingRecord = {
+        _id: recordId,
+        artist: 'Test Artist',
+        album: 'Test Album',
+        price: 100,
+        qty: 10,
+        format: RecordFormat.VINYL,
+        category: RecordCategory.ROCK,
+        mbid: 'existing-mbid',
+        tracklist: [],
+        save: jest.fn(),
+      };
+
+      const updatedRecord = {
+        ...existingRecord,
+        ...updateDto,
+      };
+
+      recordModel.findById.mockResolvedValue(existingRecord);
+      existingRecord.save.mockResolvedValue(updatedRecord);
+
+      // First, do a search to populate the cache
+      const mockQueryChain = createMockQueryChain();
+      mockQueryChain.exec.mockResolvedValue([]);
+      recordModel.find.mockReturnValue(mockQueryChain);
+      recordModel.countDocuments().exec.mockResolvedValue(0);
+      await service.findAll({ artist: 'Test' });
+
+      // Now update a record
+      await service.update(recordId, updateDto);
+
+      // Cache should have been invalidated
+      expect(cacheManager.del).toHaveBeenCalled();
     });
   });
 });

@@ -1,5 +1,7 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, Inject, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
+import { CACHE_MANAGER } from '@nestjs/cache-manager';
+import { Cache } from 'cache-manager';
 import { Model, FilterQuery } from 'mongoose';
 import { Record } from '../schemas/record.schema';
 import { RecordFilterDto, PaginatedResult } from '../dtos/record-filter.dto';
@@ -18,16 +20,64 @@ function escapeRegex(input: string): string {
 
 @Injectable()
 export class RecordService {
+  private readonly logger = new Logger(RecordService.name);
+
+  // Cache TTL for search queries: 60 seconds
+  // Short TTL provides balance between performance and data freshness
+  private readonly SEARCH_CACHE_TTL = 60 * 1000;
+  private readonly SEARCH_CACHE_PREFIX = 'records:search:';
+
+  // Track all active cache keys for invalidation
+  private readonly activeCacheKeys = new Set<string>();
+
   constructor(
     @InjectModel('Record') private readonly recordModel: Model<Record>,
     private readonly musicBrainzService: MusicBrainzService,
+    @Inject(CACHE_MANAGER) private readonly cacheManager: Cache,
   ) {}
 
   /**
+   * Generates a deterministic cache key from filter parameters.
+   */
+  private generateCacheKey(filters: RecordFilterDto): string {
+    const normalizedFilters = {
+      q: filters.q || '',
+      artist: filters.artist || '',
+      album: filters.album || '',
+      format: filters.format || '',
+      category: filters.category || '',
+      page: filters.page ?? 1,
+      limit: filters.limit ?? 50,
+    };
+    return `${this.SEARCH_CACHE_PREFIX}${JSON.stringify(normalizedFilters)}`;
+  }
+
+  /**
+   * Invalidates all cached search results.
+   * Called when records are created or updated to ensure cache consistency.
+   */
+  async invalidateSearchCache(): Promise<void> {
+    const keysToDelete = Array.from(this.activeCacheKeys);
+
+    await Promise.all(keysToDelete.map((key) => this.cacheManager.del(key)));
+    this.activeCacheKeys.clear();
+  }
+
+  /**
    * Find all records with optional filtering and pagination.
+   * Results are cached for 60 seconds (with invalidation on writes).
    * Filtering is performed at the database level for optimal performance.
    */
   async findAll(filters: RecordFilterDto): Promise<PaginatedResult<Record>> {
+    const cacheKey = this.generateCacheKey(filters);
+
+    // Check cache first
+    const cachedResult =
+      await this.cacheManager.get<PaginatedResult<Record>>(cacheKey);
+    if (cachedResult) {
+      return cachedResult;
+    }
+
     const query: FilterQuery<Record> = {};
 
     // General search query - searches across multiple fields
@@ -63,22 +113,29 @@ export class RecordService {
 
     // Execute query with pagination and get total count in parallel
     const [data, total] = await Promise.all([
-      this.recordModel.find(query).skip(skip).limit(limit).exec(),
+      this.recordModel.find(query).skip(skip).limit(limit).lean().exec(),
       this.recordModel.countDocuments(query).exec(),
     ]);
 
-    return {
-      data,
+    const result: PaginatedResult<Record> = {
+      data: data as Record[],
       total,
       page,
       limit,
       totalPages: Math.ceil(total / limit),
     };
+
+    // Cache the result and track the key for invalidation
+    await this.cacheManager.set(cacheKey, result, this.SEARCH_CACHE_TTL);
+    this.activeCacheKeys.add(cacheKey);
+
+    return result;
   }
 
   /**
    * Create a new record.
    * If an MBID is provided, fetches tracklist from MusicBrainz API.
+   * Invalidates search cache after creation.
    */
   async create(dto: CreateRecordRequestDTO): Promise<Record> {
     let tracklist = [];
@@ -88,7 +145,7 @@ export class RecordService {
       tracklist = await this.musicBrainzService.fetchTracklist(dto.mbid);
     }
 
-    return this.recordModel.create({
+    const record = await this.recordModel.create({
       artist: dto.artist,
       album: dto.album,
       price: dto.price,
@@ -98,11 +155,17 @@ export class RecordService {
       mbid: dto.mbid,
       tracklist,
     });
+
+    // Invalidate search cache since a new record was added
+    await this.invalidateSearchCache();
+
+    return record;
   }
 
   /**
    * Update an existing record.
    * If MBID is being updated, fetches tracklist from MusicBrainz API.
+   * Invalidates search cache after update.
    */
   async update(id: string, dto: UpdateRecordRequestDTO): Promise<Record> {
     const record = await this.recordModel.findById(id);
@@ -127,7 +190,12 @@ export class RecordService {
       record.tracklist = fetchedTracklist;
     }
 
-    // Save and return updated record
-    return record.save();
+    // Save the updated record
+    const updatedRecord = await record.save();
+
+    // Invalidate search cache since a record was modified
+    await this.invalidateSearchCache();
+
+    return updatedRecord;
   }
 }

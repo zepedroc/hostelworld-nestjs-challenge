@@ -1,5 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { HttpService } from '@nestjs/axios';
+import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import { Logger } from '@nestjs/common';
 import { of, throwError } from 'rxjs';
 import { MusicBrainzService } from './musicbrainz.service';
@@ -8,11 +9,18 @@ import { Track } from '../schemas/record.schema';
 describe('MusicBrainzService', () => {
   let service: MusicBrainzService;
   let httpService: jest.Mocked<HttpService>;
+  let cacheManager: any;
   let logger: jest.SpyInstance;
 
   beforeEach(async () => {
     const mockHttpService = {
       get: jest.fn(),
+    };
+
+    const mockCacheManager = {
+      get: jest.fn(),
+      set: jest.fn(),
+      del: jest.fn(),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -22,11 +30,16 @@ describe('MusicBrainzService', () => {
           provide: HttpService,
           useValue: mockHttpService,
         },
+        {
+          provide: CACHE_MANAGER,
+          useValue: mockCacheManager,
+        },
       ],
     }).compile();
 
     service = module.get<MusicBrainzService>(MusicBrainzService);
     httpService = module.get(HttpService);
+    cacheManager = module.get(CACHE_MANAGER);
 
     // Spy on logger methods
     logger = jest.spyOn(Logger.prototype, 'log').mockImplementation();
@@ -42,6 +55,108 @@ describe('MusicBrainzService', () => {
     const validMbid = 'b10bbbfc-cf9e-42e0-be17-e2c3e1d2600d';
     const baseUrl = 'https://musicbrainz.org/ws/2';
     const expectedUrl = `${baseUrl}/release/${validMbid}?inc=recordings+media`;
+
+    beforeEach(() => {
+      // Default: cache miss
+      cacheManager.get.mockResolvedValue(null);
+      cacheManager.set.mockResolvedValue(undefined);
+    });
+
+    it('should return cached tracklist on cache hit', async () => {
+      const cachedTracks: Track[] = [
+        { position: 1, title: 'Cached Track', duration: 180000 },
+      ];
+
+      cacheManager.get.mockResolvedValue(cachedTracks);
+
+      const result = await service.fetchTracklist(validMbid);
+
+      expect(result).toEqual(cachedTracks);
+      expect(cacheManager.get).toHaveBeenCalledWith(
+        `musicbrainz:tracklist:${validMbid}`,
+      );
+      expect(httpService.get).not.toHaveBeenCalled();
+      expect(logger).toHaveBeenCalledWith(`Cache hit for MBID: ${validMbid}`);
+    });
+
+    it('should fetch from API on cache miss and cache the result', async () => {
+      const mockParsedData = {
+        metadata: {
+          release: {
+            'medium-list': {
+              medium: {
+                'track-list': {
+                  track: {
+                    position: '1',
+                    title: 'Come Together',
+                    length: '259000',
+                    recording: {
+                      title: 'Come Together',
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      };
+
+      httpService.get.mockReturnValue(of({ data: 'xml' }) as any);
+      const parseSpy = jest
+        .spyOn((service as any).xmlParser, 'parse')
+        .mockReturnValue(mockParsedData);
+
+      const result = await service.fetchTracklist(validMbid);
+
+      expect(result).toHaveLength(1);
+      expect(cacheManager.get).toHaveBeenCalledWith(
+        `musicbrainz:tracklist:${validMbid}`,
+      );
+      expect(httpService.get).toHaveBeenCalled();
+      expect(cacheManager.set).toHaveBeenCalledWith(
+        `musicbrainz:tracklist:${validMbid}`,
+        result,
+        7 * 24 * 60 * 60 * 1000, // 7 days
+      );
+      expect(logger).toHaveBeenCalledWith(
+        `Cache miss for MBID: ${validMbid}, fetching from MusicBrainz`,
+      );
+
+      parseSpy.mockRestore();
+    });
+
+    it('should cache 404 responses to avoid repeated calls for invalid MBIDs', async () => {
+      const error = {
+        response: {
+          status: 404,
+        },
+        message: 'Not Found',
+      };
+
+      httpService.get.mockReturnValue(throwError(() => error) as any);
+
+      const result = await service.fetchTracklist('invalid-mbid');
+
+      expect(result).toEqual([]);
+      expect(cacheManager.set).toHaveBeenCalledWith(
+        'musicbrainz:tracklist:invalid-mbid',
+        [],
+        7 * 24 * 60 * 60 * 1000,
+      );
+    });
+
+    it('should not cache transient errors (network issues)', async () => {
+      const error = {
+        message: 'Network Error',
+      };
+
+      httpService.get.mockReturnValue(throwError(() => error) as any);
+
+      const result = await service.fetchTracklist(validMbid);
+
+      expect(result).toEqual([]);
+      expect(cacheManager.set).not.toHaveBeenCalled();
+    });
 
     it('should successfully fetch tracklist with valid MBID', async () => {
       const mockXmlData = `
@@ -109,9 +224,6 @@ describe('MusicBrainzService', () => {
         },
         timeout: 10000,
       });
-      expect(logger).toHaveBeenCalledWith(
-        `Fetching tracklist from MusicBrainz for MBID: ${validMbid}`,
-      );
       expect(logger).toHaveBeenCalledWith(
         `Successfully fetched 1 tracks for MBID: ${validMbid}`,
       );
@@ -196,7 +308,7 @@ describe('MusicBrainzService', () => {
       );
     });
 
-    it('should log fetch attempt and success', async () => {
+    it('should log cache miss and fetch success', async () => {
       const mockXmlData =
         '<metadata><release><medium-list></medium-list></release></metadata>';
       const mockParsedData = {
@@ -215,7 +327,7 @@ describe('MusicBrainzService', () => {
       await service.fetchTracklist(validMbid);
 
       expect(logger).toHaveBeenCalledWith(
-        `Fetching tracklist from MusicBrainz for MBID: ${validMbid}`,
+        `Cache miss for MBID: ${validMbid}, fetching from MusicBrainz`,
       );
       expect(logger).toHaveBeenCalledWith(
         `Successfully fetched 0 tracks for MBID: ${validMbid}`,

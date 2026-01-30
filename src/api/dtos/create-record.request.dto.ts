@@ -43,7 +43,7 @@ export class CreateRecordRequestDTO {
   @ApiProperty({
     description: 'Quantity of the record in stock',
     type: Number,
-    example: 1000,
+    example: 10,
   })
   @IsInt()
   @Min(0)

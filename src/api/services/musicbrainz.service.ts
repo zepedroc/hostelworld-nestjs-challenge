@@ -1,5 +1,7 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Inject } from '@nestjs/common';
 import { HttpService } from '@nestjs/axios';
+import { CACHE_MANAGER } from '@nestjs/cache-manager';
+import { Cache } from 'cache-manager';
 import { XMLParser } from 'fast-xml-parser';
 import { firstValueFrom } from 'rxjs';
 import { Track } from '../schemas/record.schema';
@@ -11,7 +13,15 @@ export class MusicBrainzService {
   private readonly userAgent = 'HostelworldChallenge/1.0 (contact@example.com)';
   private readonly xmlParser: XMLParser;
 
-  constructor(private readonly httpService: HttpService) {
+  // Cache TTL for MusicBrainz responses: 7 days (in milliseconds)
+  // Album tracklists are immutable, so long TTL is safe
+  private readonly MUSICBRAINZ_CACHE_TTL = 7 * 24 * 60 * 60 * 1000;
+  private readonly CACHE_KEY_PREFIX = 'musicbrainz:tracklist:';
+
+  constructor(
+    private readonly httpService: HttpService,
+    @Inject(CACHE_MANAGER) private readonly cacheManager: Cache,
+  ) {
     this.xmlParser = new XMLParser({
       ignoreAttributes: false,
       attributeNamePrefix: '@_',
@@ -20,13 +30,23 @@ export class MusicBrainzService {
 
   /**
    * Fetches tracklist from MusicBrainz API for a given release MBID.
+   * Results are cached for 7 days since album tracklists are immutable.
    * Returns an empty array if the MBID is invalid or the API is unavailable.
    */
   async fetchTracklist(mbid: string): Promise<Track[]> {
+    const cacheKey = `${this.CACHE_KEY_PREFIX}${mbid}`;
+
+    // Check cache first
+    const cachedTracks = await this.cacheManager.get<Track[]>(cacheKey);
+    if (cachedTracks !== undefined && cachedTracks !== null) {
+      this.logger.log(`Cache hit for MBID: ${mbid}`);
+      return cachedTracks;
+    }
+
+    this.logger.log(`Cache miss for MBID: ${mbid}, fetching from MusicBrainz`);
+
     try {
       const url = `${this.baseUrl}/release/${mbid}?inc=recordings+media`;
-
-      this.logger.log(`Fetching tracklist from MusicBrainz for MBID: ${mbid}`);
 
       const response = await firstValueFrom(
         this.httpService.get(url, {
@@ -39,14 +59,20 @@ export class MusicBrainzService {
       );
 
       const tracks = this.parseTracklist(response.data);
+
       this.logger.log(
         `Successfully fetched ${tracks.length} tracks for MBID: ${mbid}`,
       );
+
+      // Cache the result (including empty arrays for valid but trackless releases)
+      await this.cacheManager.set(cacheKey, tracks, this.MUSICBRAINZ_CACHE_TTL);
 
       return tracks;
     } catch (error) {
       if (error.response?.status === 404) {
         this.logger.warn(`Invalid MBID: ${mbid} - Release not found`);
+        // Cache 404 responses to avoid repeated calls for invalid MBIDs
+        await this.cacheManager.set(cacheKey, [], this.MUSICBRAINZ_CACHE_TTL);
       } else {
         this.logger.error(
           `Failed to fetch tracklist for MBID ${mbid}: ${error.message}`,
