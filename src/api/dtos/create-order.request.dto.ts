@@ -1,5 +1,6 @@
 import { IsNotEmpty, IsInt, Min, IsMongoId } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
+import { Type } from 'class-transformer';
 
 export class CreateOrderRequestDTO {
   @ApiProperty({
@@ -16,6 +17,7 @@ export class CreateOrderRequestDTO {
     type: Number,
     example: 2,
   })
+  @Type(() => Number)
   @IsInt()
   @Min(1)
   qty: number;
