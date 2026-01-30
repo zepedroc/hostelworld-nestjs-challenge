@@ -1,9 +1,10 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, FilterQuery } from 'mongoose';
 import { Record } from '../schemas/record.schema';
 import { RecordFilterDto, PaginatedResult } from '../dtos/record-filter.dto';
 import { CreateRecordRequestDTO } from '../dtos/create-record.request.dto';
+import { UpdateRecordRequestDTO } from '../dtos/update-record.request.dto';
 import { MusicBrainzService } from './musicbrainz.service';
 
 @Injectable()
@@ -87,5 +88,30 @@ export class RecordService {
       mbid: dto.mbid,
       tracklist,
     });
+  }
+
+  /**
+   * Update an existing record.
+   * If MBID is being updated, fetches tracklist from MusicBrainz API.
+   */
+  async update(id: string, dto: UpdateRecordRequestDTO): Promise<Record> {
+    const record = await this.recordModel.findById(id);
+    if (!record) {
+      throw new NotFoundException('Record not found');
+    }
+
+    // Check if MBID is being updated
+    const isMbidUpdated = dto.mbid && dto.mbid !== record.mbid;
+
+    // If MBID is being updated, fetch tracklist from MusicBrainz
+    if (isMbidUpdated) {
+      record.tracklist = await this.musicBrainzService.fetchTracklist(dto.mbid);
+    }
+
+    // Update record fields
+    Object.assign(record, dto);
+
+    // Save and return updated record
+    return record.save();
   }
 }
