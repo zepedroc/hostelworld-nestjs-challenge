@@ -95,21 +95,22 @@ export class MusicBrainzService {
 
         for (const track of trackArray) {
           const recording = track.recording;
-          const position = parseInt(track.position, 10);
+          const position = parseInt(track.position, 10) || 0;
 
           // Title can be on the track itself or fall back to recording title
           const title = track.title || recording?.title || 'Unknown Track';
 
           // Duration is in milliseconds, can be on track or recording
+          const rawLength = track.length ?? recording?.length;
           const durationMs =
-            track.length || recording?.length
-              ? parseInt(track.length || recording?.length, 10)
+            rawLength !== undefined
+              ? parseInt(String(rawLength), 10)
               : undefined;
 
           tracks.push({
             position,
             title,
-            duration: durationMs,
+            duration: Number.isNaN(durationMs) ? undefined : durationMs,
           });
         }
       }

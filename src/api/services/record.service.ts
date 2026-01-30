@@ -6,6 +6,15 @@ import { RecordFilterDto, PaginatedResult } from '../dtos/record-filter.dto';
 import { CreateRecordRequestDTO } from '../dtos/create-record.request.dto';
 import { UpdateRecordRequestDTO } from '../dtos/update-record.request.dto';
 import { MusicBrainzService } from './musicbrainz.service';
+import { Track } from '../schemas/record.schema';
+
+/**
+ * Escapes special regex characters to prevent ReDoS attacks.
+ * This ensures user input is treated as literal text in regex queries.
+ */
+function escapeRegex(input: string): string {
+  return input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 
 @Injectable()
 export class RecordService {
@@ -23,20 +32,21 @@ export class RecordService {
 
     // General search query - searches across multiple fields
     if (filters.q) {
+      const escapedQ = escapeRegex(filters.q);
       query.$or = [
-        { artist: { $regex: filters.q, $options: 'i' } },
-        { album: { $regex: filters.q, $options: 'i' } },
-        { category: { $regex: filters.q, $options: 'i' } },
+        { artist: { $regex: escapedQ, $options: 'i' } },
+        { album: { $regex: escapedQ, $options: 'i' } },
+        { category: { $regex: escapedQ, $options: 'i' } },
       ];
     }
 
     // Specific field filters
     if (filters.artist) {
-      query.artist = { $regex: filters.artist, $options: 'i' };
+      query.artist = { $regex: escapeRegex(filters.artist), $options: 'i' };
     }
 
     if (filters.album) {
-      query.album = { $regex: filters.album, $options: 'i' };
+      query.album = { $regex: escapeRegex(filters.album), $options: 'i' };
     }
 
     if (filters.format) {
@@ -104,12 +114,18 @@ export class RecordService {
     const isMbidUpdated = dto.mbid && dto.mbid !== record.mbid;
 
     // If MBID is being updated, fetch tracklist from MusicBrainz
+    let fetchedTracklist: Track[] = [];
     if (isMbidUpdated) {
-      record.tracklist = await this.musicBrainzService.fetchTracklist(dto.mbid);
+      fetchedTracklist = await this.musicBrainzService.fetchTracklist(dto.mbid);
     }
 
     // Update record fields
     Object.assign(record, dto);
+
+    // Apply fetched tracklist after DTO merge to prevent overwrite
+    if (fetchedTracklist !== null) {
+      record.tracklist = fetchedTracklist;
+    }
 
     // Save and return updated record
     return record.save();
